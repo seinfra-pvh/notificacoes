@@ -440,10 +440,13 @@ function minhaLocalizacao(){
 const markers=new Map();
 let previewMarker=null;
 function markerStyle(p,sel){return {radius:sel?10:8,color:sel?"#111":"#ffffff",weight:sel?3:2,fillColor:COR[efetivo(p)],fillOpacity:.95};}
-function syncMarkers(){   // o mapa mostra todos os pontos; os filtros valem só para a lista
-  for(const [id,mk] of markers){ if(!S.docs.has(id)){ pontosGroup.removeLayer(mk); markers.delete(id);} }
+// No mapa: em "Pendentes" aparecem todos os pontos; ao escolher um status (ou "Todas"),
+// o mapa mostra o mesmo que a lista. Busca e interventor filtram só a lista.
+function noMapa(p){ return S.filtro==="pendentes" ? true : passaFiltro(p); }
+function syncMarkers(){
+  for(const [id,mk] of markers){ const p=S.docs.get(id); if(!p||!noMapa(p)){ if(mk.isPopupOpen()) mk.closePopup(); pontosGroup.removeLayer(mk); if(!p) markers.delete(id);} }
   for(const [id,p] of S.docs){
-    if(typeof p.lat!=="number"||typeof p.lng!=="number") continue;
+    if(typeof p.lat!=="number"||typeof p.lng!=="number"||!noMapa(p)) continue;
     let mk=markers.get(id);
     if(!mk){ mk=L.circleMarker([p.lat,p.lng],markerStyle(p,id===S.sel)); mk.on("click",()=>selecionar(id,false)); markers.set(id,mk); }
     mk.setLatLng([p.lat,p.lng]); mk.setStyle(markerStyle(p,id===S.sel));
@@ -568,7 +571,7 @@ function renderLista(){
 function renderTudo(){ renderChips(); renderSelects(); renderLista(); syncMarkers(); }
 $("chips").onclick=e=>{const c=e.target.closest(".chip"); if(!c) return; const k=c.dataset.k;
   S.filtro = (S.filtro===k && k!=="pendentes") ? "pendentes" : k;   // clicar de novo volta para Pendentes
-  renderChips(); renderLista();};
+  renderChips(); renderLista(); syncMarkers();};
 $("busca").oninput=e=>{S.busca=e.target.value; renderLista();};
 $("fInterventor").onchange=e=>{S.fInterventor=e.target.value; renderLista();};
 $("lista").onclick=e=>{const it=e.target.closest(".item"); if(it) selecionar(it.dataset.id,true);};
