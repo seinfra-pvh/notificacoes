@@ -21,6 +21,10 @@ button,input,select,textarea{font:inherit;color:inherit}
 .app{display:grid;grid-template-rows:auto 1fr;height:100%}
 header{display:flex;align-items:center;gap:12px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
 header h1{font-size:16px;font-weight:600;margin:0;letter-spacing:-.01em}
+header .logo{height:52px;width:auto;display:block;padding-right:14px;margin-right:2px;border-right:1px solid var(--line)}
+header .base{font-size:12px;color:var(--ink);margin:2px 0 1px}
+header .base a{color:#1f4fa0;font-weight:500;text-decoration:underline;text-underline-offset:2px}
+header .base a:hover{color:#163a78}
 header .sub{color:var(--muted);font-size:12px}
 header .spacer{flex:1}
 .btn{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:6px 11px;cursor:pointer;white-space:nowrap}
@@ -38,7 +42,7 @@ aside{background:var(--panel);border-right:1px solid var(--line);display:flex;fl
 .chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:3px 9px;font-size:12px;cursor:pointer;background:#fff;user-select:none}
 .chip .dot{width:9px;height:9px;border-radius:50%}
 .chip b{font-family:"IBM Plex Mono",monospace;font-weight:500}
-.chip.off{opacity:.38}
+.chip.on{border-color:var(--ink);background:#eef3ef;font-weight:600;box-shadow:inset 0 0 0 1px var(--ink)}
 .row{display:flex;gap:6px}
 .row>*{flex:1;min-width:0}
 input[type=text],input[type=number],input[type=date],select,textarea{border:1px solid var(--line);border-radius:6px;padding:6px 8px;background:#fff;width:100%}
@@ -118,15 +122,19 @@ textarea{resize:vertical;min-height:60px}
   .mobile-only{display:inline-block}
   .modal .body{grid-template-columns:1fr}
   header h1{font-size:15px}
-  header .sub{display:none}
+  header .logo{height:36px;padding-right:10px}
+  header .titulo{flex:1 1 220px}
+  header .base{font-size:11px}
 }
 </style>
 </head>
 <body>
 <div class="app">
   <header>
-    <div>
+    <img class="logo" src="logo-seinfra.png" alt="SEINFRA – Secretaria Municipal de Infraestrutura | Cidade de Porto Velho">
+    <div class="titulo">
       <h1>Notificações de recomposição de pavimento</h1>
+      <div class="base">Com base na <a href="Lei_3410_2026.pdf" download="Lei_Municipal_3410_2026.pdf">Lei Municipal nº 3.410/2026</a>, regulamentada pelo <a href="Decreto_22221_2026.pdf" download="Decreto_Municipal_22221_2026.pdf">Decreto Municipal nº 22.221/2026</a></div>
       <div class="sub" id="subline">Carregando…</div>
     </div>
     <div class="spacer"></div>
@@ -141,11 +149,8 @@ textarea{resize:vertical;min-height:60px}
     <aside id="aside">
       <div class="filters">
         <div class="chips" id="chips"></div>
-        <input type="text" id="busca" placeholder="Buscar nº, via ou trecho">
-        <div class="row">
-          <select id="fInterventor"><option value="">Todos os interventores</option></select>
-          <select id="fTipo"><option value="">Todos os tipos</option></select>
-        </div>
+        <input type="text" id="busca" placeholder="Buscar nº da notificação ou via">
+        <select id="fInterventor"><option value="">Todos os interventores</option></select>
       </div>
       <div class="list" id="lista"><div class="empty">Carregando notificações…</div></div>
       <div class="foot" id="foot"></div>
@@ -310,8 +315,8 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const S = {
   docs:new Map(),
   config:{prazoPadrao:null, base:"recebimento", camadas:[]},
-  filtroStatus:new Set(STATUS.map(s=>s.k)),
-  busca:"", fInterventor:"", fTipo:"",
+  filtro:"pendentes",            // "pendentes", "todas" ou a chave de um status
+  busca:"", fInterventor:"",
   sel:null, session:null, usuario:"", loaded:false, fitted:false,
   editing:null, formFotos:[], removerFotos:[], pick:null
 };
@@ -435,11 +440,10 @@ function minhaLocalizacao(){
 const markers=new Map();
 let previewMarker=null;
 function markerStyle(p,sel){return {radius:sel?10:8,color:sel?"#111":"#ffffff",weight:sel?3:2,fillColor:COR[efetivo(p)],fillOpacity:.95};}
-function syncMarkers(){
-  const vis=new Set(visiveis().map(([id])=>id));
-  for(const [id,mk] of markers){ if(!S.docs.has(id)||!vis.has(id)){ pontosGroup.removeLayer(mk); if(!S.docs.has(id)) markers.delete(id);} }
+function syncMarkers(){   // o mapa mostra todos os pontos; os filtros valem só para a lista
+  for(const [id,mk] of markers){ if(!S.docs.has(id)){ pontosGroup.removeLayer(mk); markers.delete(id);} }
   for(const [id,p] of S.docs){
-    if(!vis.has(id)||typeof p.lat!=="number"||typeof p.lng!=="number") continue;
+    if(typeof p.lat!=="number"||typeof p.lng!=="number") continue;
     let mk=markers.get(id);
     if(!mk){ mk=L.circleMarker([p.lat,p.lng],markerStyle(p,id===S.sel)); mk.on("click",()=>selecionar(id,false)); markers.set(id,mk); }
     mk.setLatLng([p.lat,p.lng]); mk.setStyle(markerStyle(p,id===S.sel));
@@ -513,31 +517,40 @@ function selecionar(id,voar=true){
 function visiveis(){
   const q=S.busca.toLowerCase().normalize("NFD").replace(/\p{M}/gu,"");
   return [...S.docs.entries()].filter(([id,p])=>{
-    if(!S.filtroStatus.has(efetivo(p))) return false;
+    if(!passaFiltro(p)) return false;
     if(S.fInterventor && (p.interventor||"")!==S.fInterventor) return false;
-    if(S.fTipo && (p.tipo||"")!==S.fTipo) return false;
-    if(q){const h=[p.numero,p.via,p.trecho,p.observacoes].join(" ").toLowerCase().normalize("NFD").replace(/\p{M}/gu,""); if(!h.includes(q)) return false;}
+    if(q){const h=[p.numero,p.via].join(" ").toLowerCase().normalize("NFD").replace(/\p{M}/gu,""); if(!h.includes(q)) return false;}
     return true;
   }).sort((a,b)=>natCmp(a[1].numero,b[1].numero));
+}
+const OCULTOS_PADRAO=["concluido"];   // status que não aparecem em "Pendentes"
+function passaFiltro(p){
+  const k=efetivo(p);
+  if(S.filtro==="todas") return true;
+  if(S.filtro==="pendentes") return !OCULTOS_PADRAO.includes(k);
+  return k===S.filtro;
 }
 function renderChips(){
   const cont={}; STATUS.forEach(s=>cont[s.k]=0);
   for(const p of S.docs.values()) cont[efetivo(p)]++;
-  $("chips").innerHTML=STATUS.map(s=>`<span class="chip ${S.filtroStatus.has(s.k)?"":"off"}" data-k="${s.k}" title="Mostrar/ocultar"><span class="dot" style="background:${COR[s.k]}"></span>${esc(s.k==="concluido"?"Concluído":s.k==="seinfra"?"SEINFRA (cobrança)":s.nome)} <b>${cont[s.k]}</b></span>`).join("");
+  const pend=[...S.docs.values()].filter(p=>!OCULTOS_PADRAO.includes(efetivo(p))).length;
+  const chip=(k,txt,n,cor)=>`<span class="chip ${S.filtro===k?"on":""}" data-k="${k}">${cor?`<span class="dot" style="background:${cor}"></span>`:""}${esc(txt)} <b>${n}</b></span>`;
+  $("chips").innerHTML=chip("pendentes","Pendentes",pend)+chip("todas","Todas",S.docs.size)+
+    STATUS.map(s=>chip(s.k,s.k==="concluido"?"Concluído":s.k==="seinfra"?"SEINFRA (cobrança)":s.nome,cont[s.k],COR[s.k])).join("");
   $("subline").textContent=`${S.docs.size} pontos · ${cont.aguardando} aguardando prazo · ${cont.vencido} vencidos · ${cont.verificar} a verificar`;
 }
 function renderSelects(){
   const fill=(sel,vals,first)=>{const cur=sel.value;sel.innerHTML=`<option value="">${first}</option>`+vals.map(v=>`<option ${v===cur?"selected":""}>${esc(v)}</option>`).join("");};
   const ints=[...new Set([...S.docs.values()].map(p=>p.interventor).filter(Boolean))].sort(natCmp);
   const tipos=[...new Set([...S.docs.values()].map(p=>p.tipo).filter(Boolean))].sort(natCmp);
-  fill($("fInterventor"),ints,"Todos os interventores"); fill($("fTipo"),tipos,"Todos os tipos");
+  fill($("fInterventor"),ints,"Todos os interventores");
   $("dlInterventor").innerHTML=[...new Set(["CAERD","SEOSP",...ints])].map(v=>`<option value="${esc(v)}">`).join("");
   $("dlTipo").innerHTML=[...new Set(["Buraco","Vala",...tipos])].map(v=>`<option value="${esc(v)}">`).join("");
 }
 function renderLista(){
   if(!S.loaded) return;
   const vs=visiveis();
-  if(!vs.length) $("lista").innerHTML=`<div class="empty">${S.docs.size?"Nenhum ponto com esses filtros.":"Nenhuma notificação cadastrada ainda."+(logado()?" Use “+ Novo ponto” ou “Importar planilha”.":" Entre para cadastrar.")}</div>`;
+  if(!vs.length) $("lista").innerHTML=`<div class="empty">${S.docs.size?"Nenhuma notificação neste filtro.":"Nenhuma notificação cadastrada ainda."+(logado()?" Use “+ Novo ponto” ou “Importar planilha”.":" Entre para cadastrar.")}</div>`;
   else $("lista").innerHTML=vs.map(([id,p])=>{
     const k=efetivo(p), pi=prazoInfo(p);
     let d="";
@@ -553,10 +566,11 @@ function renderLista(){
   $("foot").textContent=`${vs.length} de ${S.docs.size} pontos visíveis`;
 }
 function renderTudo(){ renderChips(); renderSelects(); renderLista(); syncMarkers(); }
-$("chips").onclick=e=>{const c=e.target.closest(".chip"); if(!c) return; const k=c.dataset.k; if(S.filtroStatus.has(k)) S.filtroStatus.delete(k); else S.filtroStatus.add(k); renderTudo();};
-$("busca").oninput=e=>{S.busca=e.target.value; renderLista(); syncMarkers();};
-$("fInterventor").onchange=e=>{S.fInterventor=e.target.value; renderLista(); syncMarkers();};
-$("fTipo").onchange=e=>{S.fTipo=e.target.value; renderLista(); syncMarkers();};
+$("chips").onclick=e=>{const c=e.target.closest(".chip"); if(!c) return; const k=c.dataset.k;
+  S.filtro = (S.filtro===k && k!=="pendentes") ? "pendentes" : k;   // clicar de novo volta para Pendentes
+  renderChips(); renderLista();};
+$("busca").oninput=e=>{S.busca=e.target.value; renderLista();};
+$("fInterventor").onchange=e=>{S.fInterventor=e.target.value; renderLista();};
 $("lista").onclick=e=>{const it=e.target.closest(".item"); if(it) selecionar(it.dataset.id,true);};
 $("btnLista").onclick=()=>$("aside").classList.toggle("open");
 
